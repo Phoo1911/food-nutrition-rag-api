@@ -10,9 +10,9 @@ This project is a small retrieval-augmented generation backend that:
 - optionally uses FAISS for vector search
 - sends the retrieved context to Gemini for a concise Korean answer
 
-## Why This Project Is Portfolio-Worthy
+## Technical Highlights
 
-This repository demonstrates practical backend engineering skills rather than just a single API call:
+This service combines several backend concerns into one workflow:
 
 - external API integration across multiple data sources
 - resilient request handling with retries and timeout controls
