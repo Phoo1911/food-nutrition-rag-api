@@ -6,11 +6,23 @@ from typing import List
 
 import requests
 
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _parse_keyword_list(output: str) -> List[str]:
+    """Gemini often wraps JSON in ```json fences; strip them before parsing."""
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", output.strip())
+    values = json.loads(text)
+    if not isinstance(values, list):
+        return []
+    return [v.strip() for v in values if isinstance(v, str) and v.strip()]
+
 
 class LLMClient:
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        self.model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+        self.model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip()
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
         self.timeout = 30
 
@@ -28,26 +40,25 @@ class LLMClient:
             try:
                 response = requests.post(
                     url,
-                    params={"key": self.api_key},
+                    headers={"x-goog-api-key": self.api_key},
                     json=payload,
                     timeout=self.timeout,
                 )
-
-                if response.status_code in (429, 500, 503):
-                    time.sleep(2**attempt)
-                    continue
-
-                response.raise_for_status()
-                data = response.json()
-
-                return (
-                    data.get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text", "")
-                    or ""
-                ).strip()
             except requests.RequestException:
+                response = None
+
+            if response is not None and response.status_code not in RETRYABLE_STATUS:
+                # 400/403/404 (bad key, retired model) will not succeed on retry.
+                if not response.ok:
+                    return ""
+                try:
+                    data = response.json()
+                except ValueError:
+                    return ""
+                parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or [{}]
+                return (parts[0].get("text") or "").strip()
+
+            if attempt < retries - 1:
                 time.sleep(2**attempt)
 
         return ""
@@ -104,15 +115,11 @@ class LLMClient:
             return self._fallback_keywords(question, max_k)
 
         try:
-            values = json.loads(output)
-            if isinstance(values, list):
-                cleaned = [value.strip() for value in values if isinstance(value, str) and value.strip()]
-                if cleaned:
-                    return cleaned[:max_k]
-        except Exception:
-            return self._fallback_keywords(question, max_k)
+            cleaned = _parse_keyword_list(output)
+        except ValueError:
+            cleaned = []
 
-        return self._fallback_keywords(question, max_k)
+        return cleaned[:max_k] if cleaned else self._fallback_keywords(question, max_k)
 
     def answer_with_context(self, question: str, keywords: List[str], context: str) -> str:
         if not self.api_key:
