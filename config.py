@@ -6,7 +6,7 @@ load_dotenv()
 
 SERVICE_KEY_ENV = os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
 CONNECT_TIMEOUT = float(os.getenv("CONNECT_TIMEOUT", "10"))
 READ_TIMEOUT = float(os.getenv("READ_TIMEOUT", "30"))

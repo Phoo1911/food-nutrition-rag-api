@@ -8,13 +8,13 @@ from api_client import call_public_api, extract_items
 from config import API_DEFS, SERVICE_KEY_ENV
 from llm_client import LLMClient
 from models import AskRequest
-from rag_store import FAISS_AVAILABLE, RAGStore
+from rag_store import FAISS_AVAILABLE, Embedder, RAGIndex
 from utils import dedup_items, food_item_to_document, make_llm_context
 
 load_dotenv()
 
 APP_TITLE = "Food Nutrition RAG API"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 APP_DESCRIPTION = (
     "Korean public food and nutrition data search API with retrieval-augmented "
     "generation support."
@@ -41,8 +41,8 @@ def get_service_key(provided_key: Optional[str]) -> str:
 
 
 @lru_cache
-def get_rag_store() -> RAGStore:
-    return RAGStore()
+def get_embedder() -> Embedder:
+    return Embedder()
 
 
 @lru_cache
@@ -79,7 +79,6 @@ def create_app() -> FastAPI:
 
     @app.post("/ask")
     def ask(req: AskRequest) -> Dict[str, Any]:
-        rag_store = get_rag_store()
         llm = get_llm_client()
         service_key = get_service_key(req.serviceKey)
 
@@ -134,9 +133,8 @@ def create_app() -> FastAPI:
             }
 
         docs = [food_item_to_document(item, index) for index, item in enumerate(all_items)]
-        rag_store.build(docs, use_faiss=req.use_faiss)
-
-        retrieved = rag_store.search(req.question, top_k=req.top_k)
+        index = RAGIndex(get_embedder(), docs, use_faiss=req.use_faiss)
+        retrieved = index.search(req.question, top_k=req.top_k)
         context = make_llm_context(retrieved, max_chars=4500)
         answer = llm.answer_with_context(req.question, keywords, context)
 
@@ -144,7 +142,7 @@ def create_app() -> FastAPI:
             "question": req.question,
             "keywords": keywords,
             "built_docs": len(docs),
-            "using_faiss": rag_store.use_faiss,
+            "using_faiss": index.use_faiss,
             "retrieved_count": len(retrieved),
             "results": [{"id": doc.id, "text": doc.text} for doc in retrieved],
             "answer": answer,
