@@ -36,6 +36,13 @@ uvicorn main:app --reload
 
 Open http://127.0.0.1:8000/docs to try it from Swagger.
 
+Or with Docker (the embedding model is baked into the image):
+
+```bash
+docker build -t food-nutrition-rag-api .
+docker run -p 8000:8000 --env-file .env food-nutrition-rag-api
+```
+
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `DATA_GO_KR_SERVICE_KEY` | yes | 공공데이터포털 인증키 (can also be sent as `serviceKey` in the body) |
@@ -75,6 +82,7 @@ Other endpoints: `GET /` (version, enabled APIs) and `GET /health` (FAISS availa
 
 ```bash
 pytest
+PYTHONPATH=. python scripts/smoke_retrieval.py   # loads the real embedding model
 ```
 
 The tests don't touch the network or download a model. They stub the public APIs, Gemini and the embedder, and cover:
@@ -83,6 +91,8 @@ The tests don't touch the network or download a model. They stub the public APIs
 - no retry on 4xx (bad key, retired model); backoff and retry on 429 / connection errors
 - `/ask` end to end: dedupe, ranking, per-API error reporting, missing service key
 - two indexes built back to back keep separate documents
+
+CI runs the tests, the retrieval smoke test with the real multilingual model, and a Docker build that must answer `/health`.
 
 ## Limitations
 
