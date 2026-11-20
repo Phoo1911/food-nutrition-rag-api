@@ -1,57 +1,70 @@
+import os
 from typing import List, Optional
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
 from models import Document
 
 FAISS_AVAILABLE = False
 try:
     import faiss  # type: ignore
+
     FAISS_AVAILABLE = True
 except Exception:
     faiss = None
 
-class RAGStore:
-    def __init__(self, embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(embed_model)
-        self.docs: List[Document] = []
-        self.use_faiss: bool = False
+# all-MiniLM-L6-v2 was trained on English text and ranks Korean food names poorly.
+DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-        self.emb: Optional[np.ndarray] = None  # (N,D) normalized
-        self.index = None
 
-    def build(self, docs: List[Document], use_faiss: bool = True) -> int:
+def _normalize(vectors: np.ndarray) -> np.ndarray:
+    vectors = np.asarray(vectors, dtype=np.float32)
+    return vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-12)
+
+
+class Embedder:
+    """Loads the sentence-transformers model once and shares it across requests."""
+
+    def __init__(self, model_name: Optional[str] = None):
+        from sentence_transformers import SentenceTransformer
+
+        self.model_name = model_name or os.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL)
+        self.model = SentenceTransformer(self.model_name)
+
+    def encode(self, texts: List[str]) -> np.ndarray:
+        return _normalize(self.model.encode(texts, show_progress_bar=False))
+
+
+class RAGIndex:
+    """Search index for a single request.
+
+    Each /ask call builds its own index, so two requests running at the same
+    time cannot overwrite each other's documents.
+    """
+
+    def __init__(self, embedder, docs: List[Document], use_faiss: bool = True):
+        self.embedder = embedder
         self.docs = docs
-        texts = [d.text for d in docs]
-        vec = self.model.encode(texts, show_progress_bar=False)
-        vec = np.array(vec, dtype=np.float32)
-
-        # 코사인용 정규화
-        vec = vec / (np.linalg.norm(vec, axis=1, keepdims=True) + 1e-12)
-        self.emb = vec
-
-        self.use_faiss = bool(use_faiss and FAISS_AVAILABLE)
+        self.use_faiss = bool(use_faiss and FAISS_AVAILABLE and docs)
         self.index = None
+        self.emb = embedder.encode([d.text for d in docs]) if docs else None
 
         if self.use_faiss:
-            dim = vec.shape[1]
-            self.index = faiss.IndexFlatIP(dim)  # 코사인(정규화) => inner product
-            self.index.add(vec)
-
-        return len(docs)
+            self.index = faiss.IndexFlatIP(self.emb.shape[1])
+            self.index.add(self.emb)
 
     def search(self, query: str, top_k: int = 3) -> List[Document]:
         if self.emb is None or not self.docs:
             return []
 
-        q = self.model.encode([query])
-        q = np.array(q, dtype=np.float32)
-        q = q / (np.linalg.norm(q, axis=1, keepdims=True) + 1e-12)
+        top_k = min(top_k, len(self.docs))
+        q = self.embedder.encode([query])
 
-        if self.use_faiss and self.index is not None:
-            scores, idx = self.index.search(q, top_k)
-            I = idx[0]
+        if self.index is not None:
+            _, idx = self.index.search(q, top_k)
+            order = idx[0]
         else:
-            scores = (self.emb @ q[0]).reshape(-1)
-            I = np.argsort(-scores)[:top_k]
+            scores = self.emb @ q[0]
+            order = np.argsort(-scores)[:top_k]
 
-        return [self.docs[i] for i in I if 0 <= i < len(self.docs)]
+        return [self.docs[i] for i in order if 0 <= i < len(self.docs)]
